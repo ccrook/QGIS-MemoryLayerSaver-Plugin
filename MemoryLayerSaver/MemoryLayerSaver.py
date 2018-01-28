@@ -1,10 +1,18 @@
-from __future__ import with_statement
 
-from PyQt4.QtGui import *
-from PyQt4.QtCore import *
+
+from PyQt5.QtGui import *
+from PyQt5.QtWidgets import *
+from PyQt5.QtCore import *
+from PyQt5.QtXml import *
 from qgis.core import *
 import sys
 
+
+try:
+    QString = unicode
+except NameError:
+    # Python 3
+    QString = str
 
 class Writer( QObject ):
 
@@ -27,7 +35,7 @@ class Writer( QObject ):
             raise ValueError("Cannot open "+self._filename)
         self._dstream = QDataStream( self._file )
         self._dstream.setVersion(QDataStream.Qt_4_5)
-        for c in "QGis.MemoryLayerData":
+        for c in b"QGis.MemoryLayerData":
             self._dstream.writeUInt8(c)
         # Version of MLD format
         self._dstream.writeUInt32(1)
@@ -78,8 +86,9 @@ class Writer( QObject ):
             if not geom:
                 ds.writeUInt32(0)
             else:
-                ds.writeUInt32(geom.wkbSize())
-                ds.writeRawData(geom.asWkb())
+                wkb=geom.asWkb()
+                ds.writeUInt32(len(wkb))
+                ds.writeRawData(wkb)
         ds.writeBool(False)
 
 class Reader( QObject ):
@@ -102,7 +111,7 @@ class Reader( QObject ):
             raise ValueError("Cannot open "+self._filename)
         self._dstream = QDataStream( self._file )
         self._dstream.setVersion(QDataStream.Qt_4_5)
-        for c in "QGis.MemoryLayerData":
+        for c in b"QGis.MemoryLayerData":
 
             ct = self._dstream.readUInt8()
             if ct != c:
@@ -134,7 +143,8 @@ class Reader( QObject ):
             for l in layers:
                 if l.id() == id:
                     layer = l
-            if not layer:
+                    break
+            if layer is None:
                  self.skipLayer()
             else:
                 self.readLayer( layer )
@@ -143,12 +153,12 @@ class Reader( QObject ):
         ds=self._dstream
         dp = layer.dataProvider()
         if dp.featureCount() > 0:
-            raise ValueError(u"Memory layer "+id+" is already loaded")
+            raise ValueError("Memory layer "+id+" is already loaded")
         attr=dp.attributeIndexes()
         dp.deleteAttributes(attr)
 
         nattr = ds.readInt16()
-        attr=range(nattr)
+        attr=list(range(nattr))
         for i in attr:
             name=ds.readQString()
             qtype=ds.readInt16()
@@ -161,7 +171,9 @@ class Reader( QObject ):
 
         nullgeom=QgsGeometry()
         fields=dp.fields()
-        while ds.readBool():
+        x=ds.readBool()
+        #while ds.readBool():
+        while x:
             feat=QgsFeature(fields)
             for i in attr:
                 value=ds.readQVariant()
@@ -176,13 +188,14 @@ class Reader( QObject ):
                 geom.fromWkb(ds.readRawData(wkbSize))
                 feat.setGeometry(geom)
             dp.addFeatures([feat])
+            x=ds.readBool()
         layer.updateFields()
         layer.updateExtents()
 
     def skipLayer( self ):
         ds=self._dstream
         nattr = ds.readInt16()
-        attr=range(nattr)
+        attr=list(range(nattr))
         for i in attr:
             name=ds.readQString()
             qtype=ds.readInt16()
@@ -201,7 +214,7 @@ class MemoryLayerSaver:
 
     def __init__( self, iface ):
         self._iface = iface
-        version = QGis.QGIS_VERSION_INT
+        version = Qgis.QGIS_VERSION_INT
         self._deleteSignalOk = version >= 10700
 
     def attachToProject(self):
@@ -210,7 +223,7 @@ class MemoryLayerSaver:
 
     def detachFromProject(self):      
         # Following line OK in 1.7
-        # Cannot delete memory files in QGis 1.6 as they get deleted
+        # Cannot delete memory files in Qgis 1.6 as they get deleted
         # on project exit.
         # self.deleteMemoryDataFiles()
         self.disconnectFromProject()
@@ -219,35 +232,35 @@ class MemoryLayerSaver:
 
     def connectToProject(self):
         proj = QgsProject.instance()
-        QObject.connect(proj, SIGNAL("readProject(const QDomDocument &)"),self.loadData)
-        QObject.connect(proj, SIGNAL("writeProject(QDomDocument &)"),self.saveData)
-        QObject.connect(QgsMapLayerRegistry.instance(), SIGNAL("layerWasAdded(QgsMapLayer *)"),self.connectProvider)
+        proj.readProject.connect(self.loadData)
+        proj.writeProject.connect(self.saveData)
+        QgsProject.instance().layerWasAdded[QgsMapLayer].connect(self.connectProvider)
 
     def disconnectFromProject(self):
         proj = QgsProject.instance()
-        QObject.disconnect(proj, SIGNAL("readProject(const QDomDocument &)"),self.loadData)
-        QObject.disconnect(proj, SIGNAL("writeProject(QDomDocument &)"),self.saveData)
-        QObject.disconnect(QgsMapLayerRegistry.instance(), SIGNAL("layerWasAdded(QgsMapLayer *)"),self.connectProvider)
+        proj.readProject.disconnect(self.loadData)
+        proj.writeProject.disconnect(self.saveData)
+        QgsProject.instance().layerWasAdded[QgsMapLayer].disconnect(self.connectProvider)
 
     def connectProvider( self, layer ):
         if self.isSavedLayer(layer):
-            QObject.connect(layer, SIGNAL("committedAttributesDeleted"),self.setProjectDirty2)
-            QObject.connect(layer, SIGNAL("committedAttributesAdded"),self.setProjectDirty2)
+            layer.committedAttributesDeleted.connect(self.setProjectDirty2)
+            layer.committedAttributesAdded.connect(self.setProjectDirty2)
             if self._deleteSignalOk:
-                QObject.connect(layer, SIGNAL("committedFeaturesRemoved"),self.setProjectDirty2)
-            QObject.connect(layer, SIGNAL("committedFeaturesAdded"),self.setProjectDirty2)
-            QObject.connect(layer, SIGNAL("committedAttributeValuesChanges"),self.setProjectDirty2)
-            QObject.connect(layer, SIGNAL("committedGeometriesChanges"),self.setProjectDirty2)
+                layer.committedFeaturesRemoved.connect(self.setProjectDirty2)
+            layer.committedFeaturesAdded.connect(self.setProjectDirty2)
+            layer.committedAttributeValuesChanges.connect(self.setProjectDirty2)
+            layer.committedGeometriesChanges.connect(self.setProjectDirty2)
 
     def disconnectProvider( self, layer ):
         if self.isSavedLayer(layer):
-            QObject.disconnect(layer, SIGNAL("committedAttributesDeleted"),self.setProjectDirty2)
-            QObject.disconnect(layer, SIGNAL("committedAttributesAdded"),self.setProjectDirty2)
+            layer.committedAttributesDeleted.disconnect(self.setProjectDirty2)
+            layer.committedAttributesAdded.disconnect(self.setProjectDirty2)
             if self._deleteSignalOk:
-                QObject.disconnect(layer, SIGNAL("committedFeaturesRemoved"),self.setProjectDirty2)
-            QObject.disconnect(layer, SIGNAL("committedFeaturesAdded"),self.setProjectDirty2)
-            QObject.disconnect(layer, SIGNAL("committedAttributeValuesChanges"),self.setProjectDirty2)
-            QObject.disconnect(layer, SIGNAL("committedGeometriesChanges"),self.setProjectDirty2)
+                layer.committedFeaturesRemoved.disconnect(self.setProjectDirty2)
+            layer.committedFeaturesAdded.disconnect(self.setProjectDirty2)
+            layer.committedAttributeValuesChanges.disconnect(self.setProjectDirty2)
+            layer.committedGeometriesChanges.disconnect(self.setProjectDirty2)
 
     def connectMemoryLayers( self ):
         for layer in self.memoryLayers():
@@ -274,7 +287,7 @@ class MemoryLayerSaver:
                 except:
                     QMessageBox.information(
                         self._iface.mainWindow(),"Error reloading memory layers",
-                        unicode(sys.exc_info()[1]) ) 
+                        str(sys.exc_info()[1]) ) 
 
     def saveData(self):
         try:
@@ -291,10 +304,10 @@ class MemoryLayerSaver:
         except:
             raise
             QMessageBox.information(self._iface.mainWindow(),"Error saving memory layers",
-                                    unicode(sys.exc_info()[1]) )
+                                    str(sys.exc_info()[1]) )
 
     def memoryLayers(self):
-        for l in QgsMapLayerRegistry.instance().mapLayers().values():
+        for l in list(QgsProject.instance().mapLayers().values()):
             if self.isSavedLayer(l):
                 yield l
 
@@ -302,7 +315,7 @@ class MemoryLayerSaver:
         if l.type() != QgsMapLayer.VectorLayer:
             return
         pr = l.dataProvider()
-        if not pr or pr.name() != 'memory':
+        if (pr is None) or (pr.name() != 'memory'):
             return False
         use = l.customProperty("SaveMemoryProvider")
         return not (use == False)
@@ -326,10 +339,10 @@ class MemoryLayerSaver:
         self.setProjectDirty()
 
     def setProjectDirty(self):
-        QgsProject.instance().dirty(True)
+        QgsProject.instance().setDirty(True)
 
     def showInfo(self):
-        names = [unicode(l.name()) for l in self.memoryLayers()]
+        names = [str(l.name()) for l in self.memoryLayers()]
         message = ''
         if len(names) == 0:
             message = "This project contains no memory data provider layers to be saved"
