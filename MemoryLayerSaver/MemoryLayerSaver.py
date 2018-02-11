@@ -31,6 +31,7 @@ class Writer( QObject ):
 
     def open( self ):
         self._file = QFile(self._filename)
+        print("Filename: {0}".format(self._filename))
         if not self._file.open(QIODevice.WriteOnly):
             raise ValueError("Cannot open "+self._filename)
         self._dstream = QDataStream( self._file )
@@ -76,7 +77,6 @@ class Writer( QObject ):
             ds.writeInt16(fld.precision())
             ds.writeQString(fld.comment())
 
-        subset=layer.subsetString()
         layer.setSubsetString('')
         for feat in layer.getFeatures():
             ds.writeBool(True)
@@ -94,7 +94,7 @@ class Writer( QObject ):
                 ds.writeUInt32(len(wkb))
                 ds.writeRawData(wkb)
         ds.writeBool(False)
-        layer.setSubsetString(subset)
+        layer.setSubsetString(ss)
 
 class Reader( QObject ):
 
@@ -180,9 +180,7 @@ class Reader( QObject ):
 
         nullgeom=QgsGeometry()
         fields=dp.fields()
-        x=ds.readBool()
-        #while ds.readBool():
-        while x:
+        while ds.readBool():
             feat=QgsFeature(fields)
             for i in attr:
                 value=ds.readQVariant()
@@ -197,7 +195,6 @@ class Reader( QObject ):
                 geom.fromWkb(ds.readRawData(wkbSize))
                 feat.setGeometry(geom)
             dp.addFeatures([feat])
-            x=ds.readBool()
         layer.setSubsetString(ss)
         layer.updateFields()
         layer.updateExtents()
