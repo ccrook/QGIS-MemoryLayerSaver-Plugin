@@ -31,7 +31,6 @@ class Writer( QObject ):
 
     def open( self ):
         self._file = QFile(self._filename)
-        print("Filename: {0}".format(self._filename))
         if not self._file.open(QIODevice.WriteOnly):
             raise ValueError("Cannot open "+self._filename)
         self._dstream = QDataStream( self._file )
